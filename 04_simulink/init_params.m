@@ -4,14 +4,14 @@
 % 所有 Simulink 模型在运行前必须先执行此脚本
 % 参数值与修改请对照 00_frozen/params.md（S1 冻结参数唯一真相源）
 %
-% 电机型号：57BLF01（24V/63W/3000rpm），配 48V 母线 + PWM 降压，减速比 12.5:1
+% 电机型号：57BLF02（24V/125W/3000rpm），配 48V 母线 + PWM 降压，减速比 12.5:1
 % 参考模板：MathWorks Simscape Electrical 官方示例 "BLDC Speed Control"
 %           openExample('simscapeelectrical/BLDCSpeedControlExample')
 %
-% 最后更新：2026-04-18  适配构架方案2（电机选型优化）
+% 最后更新：2026-04-18  57BLF01→57BLF02（消除坡道稳态超额定问题）
 
 clear; clc;
-fprintf('\n========== 电气传动仿真 · 初始化全局参数（方案2：57BLF01）==========\n\n');
+fprintf('\n========== 电气传动仿真 · 初始化全局参数（方案2：57BLF02）==========\n\n');
 
 %% ═══════════════════════════════════════════════════════════════
 %  第一部分：题设给定参数（固定值，AB=00，CD=00 已代入）
@@ -57,7 +57,7 @@ F_sum_1      = F_r_1_alpha + F_g_1;            % 坡道总切向力 [N]  = 31.15
 T_L_slope_w  = F_sum_1 * r;                    % 轮侧坡道阻力矩 [N·m]  = 2.492
 
 %--- 2.3 减速比与电机轴转速 ---
-% 57BLF01 额定转速 3000 rpm → i = 3000/240 = 12.5
+% 57BLF02 额定转速 3000 rpm → i = 3000/240 = 12.5
 i_ratio      = 12.5;                           % 行星减速比（构架方案2 §3.2.2）
 n_m_max      = n_high * i_ratio;               % 电机轴最高转速 [rpm]  = 3000
 omega_m_max  = n_m_max * pi / 30;              % 电机轴最高角速度 [rad/s]  = 314.16
@@ -80,29 +80,29 @@ fprintf('  电机轴折算：平路 %.4f N·m | 坡道 %.4f N·m\n', T_L_m_flat,
 fprintf('  J_v,w=%.4f  J_w=%.5f  J_L,m=%.4e  kg·m²\n\n', J_v_w, J_w, J_L_m);
 
 %% ═══════════════════════════════════════════════════════════════
-%  第三部分：电机铭牌参数（57BLF01，构架方案2 §3.2.1）
+%  第三部分：电机铭牌参数（57BLF02，构架方案2 §3.2.1）
 %% ═══════════════════════════════════════════════════════════════
 
-U_N         = 24;           % 额定电压 [V]（24V型，配48V母线PWM降压）
-P_N         = 63;           % 额定功率 [W]
+U_N         = 24;           % 额定电压 [V]（24V型，配48V母线PWM降压，巡航占空比约40%）
+P_N         = 125;          % 额定功率 [W]  坡道稳态69.6W仅占55.6%，裕量充足
 n_N         = 3000;         % 额定转速 [rpm]
-I_N         = 4.0;          % 额定电流 [A]
-I_peak      = 12;           % 峰值/堵转电流 [A]
-T_N         = 0.2;          % 额定转矩 [N·m]
-T_peak      = 0.6;          % 峰值转矩 [N·m]
-K_t         = 0.065;        % 力矩常数 [N·m/A]
-K_e         = 6.23;         % 反电势常数（线-线）[V/krpm]
-Rs          = 0.6;          % 相电阻（线-线）[Ω]
-Ls          = 0.75e-3;      % 相电感（线-线）[H]  (0.75 mH)
+I_N         = 7.8;          % 额定电流 [A]
+I_peak      = 23.5;         % 峰值/堵转电流（电机） [A]  控制器限幅仍用12A
+T_N         = 0.4;          % 额定转矩 [N·m]  坡道稳态0.2215 N·m仅占55.4%
+T_peak      = 1.2;          % 峰值转矩 [N·m]  裕量2.72×
+K_t         = 0.066;        % 力矩常数 [N·m/A]
+K_e         = 6.3;          % 反电势常数（线-线）[V/krpm]
+Rs          = 0.30;         % 相电阻（线-线）[Ω]  工程估算，S2须实测校准
+Ls          = 0.75e-3;      % 相电感（线-线）[H]  (0.75 mH)  与BLF01相同，Ke近似不变
 p_poles     = 4;            % 极对数（8极）
-J_m         = 1.2e-5;       % 转子惯量 [kg·m²]  (120 g·cm²)
+J_m         = 1.7e-5;       % 转子惯量 [kg·m²]  (170 g·cm²，ACT Motor datasheet)
 
 J_eq        = J_m + J_L_m;  % 系统总折算惯量 [kg·m²]  ≈ 5.55e-4
 
-fprintf('【三、57BLF01 电机铭牌参数】\n');
+fprintf('【三、57BLF02 电机铭牌参数（ACT Motor，工程估算Rs=0.30Ω）】\n');
 fprintf('  U_N=%d V (24V/48V母线PWM), P_N=%d W, n_N=%d rpm\n', U_N, P_N, n_N);
-fprintf('  I_N=%.1f A, I_peak=%d A, T_N=%.2f N·m, T_peak=%.1f N·m\n', I_N, I_peak, T_N, T_peak);
-fprintf('  K_t=%.3f N·m/A, K_e=%.2f V/krpm\n', K_t, K_e);
+fprintf('  I_N=%.1f A, I_peak=%.1f A, T_N=%.2f N·m, T_peak=%.1f N·m\n', I_N, I_peak, T_N, T_peak);
+fprintf('  K_t=%.3f N·m/A, K_e=%.1f V/krpm\n', K_t, K_e);
 fprintf('  Rs=%.2f Ω, Ls=%.3f mH, p=%d, J_m=%.2e kg·m²\n', Rs, Ls*1e3, p_poles, J_m);
 fprintf('  J_eq = %.3e kg·m²  (J_m:J_L,m ≈ 1:%.0f，大惯量系统)\n\n', J_eq, J_L_m/J_m);
 
@@ -147,25 +147,25 @@ fprintf('  I_OC=%d A, V_OV=%d V, V_UV=%d V, omega_stall=%d rad/s\n\n', I_OC, V_O
 %  因此 K_p,i = omega_bi · tau_e · Rs  （非 2Rs）
 
 %--- 5.1 电流环 PI（零极点对消法，§5.3.1）---
-%   K_p,i = omega_bi · tau_e · Rs = 6283 × 1.25e-3 × 0.6 = 4.71
-%   K_i,i = K_p,i / tau_e         = 4.71 / 1.25e-3       = 3770
-tau_e       = Ls / Rs;                          % 电气时间常数 [s]  = 1.25 ms
+%   K_p,i = omega_bi · L_s            = 6283 × 0.75e-3       = 4.71  (K_p,i 与Rs无关)
+%   K_i,i = K_p,i / tau_e         = 4.71 / 2.50e-3       = 1884 ≈1880
+tau_e       = Ls / Rs;                          % 电气时间常数 [s]  = 2.50 ms
 omega_bi    = 2*pi*1000;                        % 目标电流环带宽 [rad/s]  ≈ 6283
 K_p_i       = omega_bi * tau_e * Rs;            % 比例增益 [V/A]  → 4.71
-K_i_i       = K_p_i / tau_e;                   % 积分增益 [V/(A·s)]  → 3770
+K_i_i       = K_p_i / tau_e;                   % 积分增益 [V/(A·s)]  → 1880
 K_p_i_norm  = K_p_i / U_dc;                    % 归一化比例增益  → 0.098
-K_i_i_norm  = K_i_i / U_dc;                    % 归一化积分增益  → 78.5
-I_max       = I_peak;                           % 电流环限幅 [A]  = 12
+K_i_i_norm  = K_i_i / U_dc;                    % 归一化积分增益  → 39.2
+I_max       = 12;                               % 电流环控制器限幅 [A]（电机峰值23.5A，控制器取12A）
 
 %--- 5.2 速度环 PI（带宽分离法，§5.3.2）---
-%   K_p,w = omega_bw · J_eq / K_t = 628 × 5.55e-4 / 0.065 = 5.36
+%   K_p,w = omega_bw · J_eq / K_t = 628 × 5.60e-4 / 0.066 = 5.33
 %   tau_w = 10 / omega_bw          = 10 / 628             = 15.9 ms
-%   K_i,w = K_p,w / tau_w          = 5.36 / 0.01592       = 337
+%   K_i,w = K_p,w / tau_w          = 5.33 / 0.01592       = 335
 omega_b_omega = omega_bi / 10;                  % 目标速度环带宽 [rad/s]  = 628
-K_p_omega   = omega_b_omega * J_eq / K_t;      % 比例增益 [−]  → 5.36
+K_p_omega   = omega_b_omega * J_eq / K_t;      % 比例增益 [−]  → 5.33
 tau_omega   = 10 / omega_b_omega;              % 积分时间常数 [s]  → 15.9 ms
-K_i_omega   = K_p_omega / tau_omega;           % 积分增益 [−]  → 337
-i_ref_max   = I_peak;                          % 速度环输出限幅 [A]  = 12
+K_i_omega   = K_p_omega / tau_omega;           % 积分增益 [−]  → 335
+i_ref_max   = 12;                              % 速度环输出限幅 [A]（与I_max一致）
 
 fprintf('【五、PI 控制器参数（分析初值）】\n');
 fprintf('  电流环：tau_e=%.3f ms, omega_bi=%.0f rad/s\n', tau_e*1e3, omega_bi);
@@ -193,12 +193,12 @@ fprintf('  电机轴：低速 %.3f rad/s  高速 %.3f rad/s\n\n', omega_m_low_cm
 %% ═══════════════════════════════════════════════════════════════
 
 fprintf('【七、参数自检（与 params.md 对照）】\n');
-refs = {'J_m',1.2e-5,1e-10; 'J_L_m',5.43e-4,5e-6; 'J_eq',5.55e-4,5e-6;
+refs = {'J_m',1.7e-5,1e-10; 'J_L_m',5.43e-4,5e-6; 'J_eq',5.60e-4,5e-6;
         'T_L_m_flat',0.0698,5e-4; 'T_L_m_slope',0.2215,5e-4;
-        'T_m_peak_req',0.4395,5e-4; 'omega_m_max',314.16,0.01;
-        'K_p_i',4.71,0.01; 'K_i_i',3770,5.0;
-        'K_p_i_norm',0.098,5e-4; 'K_i_i_norm',78.5,0.5;
-        'K_p_omega',5.36,0.02; 'K_i_omega',337,1.0};
+        'T_m_peak_req',0.4414,5e-4; 'omega_m_max',314.16,0.01;
+        'K_p_i',4.71,0.01; 'K_i_i',1880,5.0;
+        'K_p_i_norm',0.098,5e-4; 'K_i_i_norm',39.2,0.5;
+        'K_p_omega',5.33,0.02; 'K_i_omega',335,1.0};
 vals = {J_m; J_L_m; J_eq; T_L_m_flat; T_L_m_slope;
         T_m_peak_req; omega_m_max;
         K_p_i; K_i_i; K_p_i_norm; K_i_i_norm; K_p_omega; K_i_omega};
