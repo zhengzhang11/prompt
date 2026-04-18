@@ -8,10 +8,10 @@
 % 参考模板：MathWorks Simscape Electrical 官方示例 "BLDC Speed Control"
 %           openExample('simscapeelectrical/BLDCSpeedControlExample')
 %
-% 最后更新：2026-04-18  57BLF01→57BLF02（消除坡道稳态超额定问题）
+% 最后更新：2026-04-18  v1.5 电机升级57BLF02 + MO+SO PI整定，补全单闭环参数
 
 clear; clc;
-fprintf('\n========== 电气传动仿真 · 初始化全局参数（方案2：57BLF02）==========\n\n');
+fprintf('\n========== 电气传动仿真 · 初始化全局参数（方案 3：57BLF02 + MO/SO）==========\n\n');
 
 %% ═══════════════════════════════════════════════════════════════
 %  第一部分：题设给定参数（固定值，AB=00，CD=00 已代入）
@@ -92,18 +92,20 @@ T_N         = 0.4;          % 额定转矩 [N·m]  坡道稳态0.2215 N·m仅占
 T_peak      = 1.2;          % 峰值转矩 [N·m]  裕量2.72×
 K_t         = 0.066;        % 力矩常数 [N·m/A]
 K_e         = 6.3;          % 反电势常数（线-线）[V/krpm]
+K_e_krpm    = K_e;          % 保留 V/krpm 值用于显示
+K_e         = K_e_krpm / 1000 * 60 / (2*pi); % 转换为 V·s/rad ≈ 0.06016
 Rs          = 0.30;         % 相电阻（线-线）[Ω]  工程估算，S2须实测校准
 Ls          = 0.75e-3;      % 相电感（线-线）[H]  (0.75 mH)  与BLF01相同，Ke近似不变
 p_poles     = 4;            % 极对数（8极）
 J_m         = 1.7e-5;       % 转子惯量 [kg·m²]  (170 g·cm²，ACT Motor datasheet)
 
-J_eq        = J_m + J_L_m;  % 系统总折算惯量 [kg·m²]  ≈ 5.55e-4
+J_eq        = J_m + J_L_m;  % 系统总折算惯量 [kg·m²]  ≈ 5.60e-4
 
-fprintf('【三、57BLF02 电机铭牌参数（ACT Motor，工程估算Rs=0.30Ω）】\n');
+fprintf('【三、57BLF02 电机铭牌参数（ACT Motor/Longs Motor datasheet）】\n');
 fprintf('  U_N=%d V (24V/48V母线PWM), P_N=%d W, n_N=%d rpm\n', U_N, P_N, n_N);
-fprintf('  I_N=%.1f A, I_peak=%.1f A, T_N=%.2f N·m, T_peak=%.1f N·m\n', I_N, I_peak, T_N, T_peak);
-fprintf('  K_t=%.3f N·m/A, K_e=%.1f V/krpm\n', K_t, K_e);
-fprintf('  Rs=%.2f Ω, Ls=%.3f mH, p=%d, J_m=%.2e kg·m²\n', Rs, Ls*1e3, p_poles, J_m);
+fprintf('  I_N=%.1f A, I_peak=%.0f A, T_N=%.1f N·m, T_peak=%.1f N·m\n', I_N, I_peak, T_N, T_peak);
+fprintf('  K_t=%.3f N·m/A, K_e=%.4f V·s/rad (= %.2f V/krpm)\n', K_t, K_e, K_e_krpm);
+fprintf('  Rs=%.1f Ω, Ls=%.3f mH, p=%d, J_m=%.2e kg·m²\n', Rs, Ls*1e3, p_poles, J_m);
 fprintf('  J_eq = %.3e kg·m²  (J_m:J_L,m ≈ 1:%.0f，大惯量系统)\n\n', J_eq, J_L_m/J_m);
 
 %--- 选型裕量验证 ---
@@ -139,41 +141,58 @@ fprintf('  C_bus=%d μF | V_brk: %d↔%d V | R_brake=%d Ω\n', C_bus*1e6, V_brk_
 fprintf('  I_OC=%d A, V_OV=%d V, V_UV=%d V, omega_stall=%d rad/s\n\n', I_OC, V_OV, V_UV, omega_stall);
 
 %% ═══════════════════════════════════════════════════════════════
-%  第五部分：PI 控制器参数（构架方案2 §5.3）
+%  第五部分：PI 控制器参数（构架方案3 §5.3 · 工业MO+SO法）
 %% ═══════════════════════════════════════════════════════════════
 %
-%  重要说明：本方案使用 BLDCSpeedControlExample 模板（Simscape BLDC 块）
-%  电流环被控对象用每相等效：G_i(s) = (1/Rs) / (tau_e·s + 1)
-%  因此 K_p,i = omega_bi · tau_e · Rs  （非 2Rs）
+%  设计方法：工业标准"模最优法（MO）+ 对称最优法（SO）"
+%  被控对象完整串联：G_PWM(s) × G_RL(s) × G_mech(s)
+%  参考：构架方案3（被控对象修正）.md §5.2~5.4
 
-%--- 5.1 电流环 PI（零极点对消法，§5.3.1）---
-%   K_p,i = omega_bi · L_s            = 6283 × 0.75e-3       = 4.71  (K_p,i 与Rs无关)
-%   K_i,i = K_p,i / tau_e         = 4.71 / 2.50e-3       = 1884 ≈1880
+%--- 5.1 被控对象参数 ---
 tau_e       = Ls / Rs;                          % 电气时间常数 [s]  = 2.50 ms
-omega_bi    = 2*pi*1000;                        % 目标电流环带宽 [rad/s]  ≈ 6283
-K_p_i       = omega_bi * tau_e * Rs;            % 比例增益 [V/A]  → 4.71
-K_i_i       = K_p_i / tau_e;                   % 积分增益 [V/(A·s)]  → 1880
-K_p_i_norm  = K_p_i / U_dc;                    % 归一化比例增益  → 0.098
-K_i_i_norm  = K_i_i / U_dc;                    % 归一化积分增益  → 39.2
-I_max       = 12;                               % 电流环控制器限幅 [A]（电机峰值23.5A，控制器取12A）
+T_PWM_eq    = 1.5 / f_PWM;                     % PWM等效延时 [s]  = 75 μs
+K_PWM       = U_dc;                             % PWM稳态增益 [V]  = 48
+% G_i(s) = K_PWM/Rs / [(tau_e·s+1)(T_PWM_eq·s+1)] = 160/[(2.50ms·s+1)(75μs·s+1)]
 
-%--- 5.2 速度环 PI（带宽分离法，§5.3.2）---
-%   K_p,w = omega_bw · J_eq / K_t = 628 × 5.60e-4 / 0.066 = 5.33
-%   tau_w = 10 / omega_bw          = 10 / 628             = 15.9 ms
-%   K_i,w = K_p,w / tau_w          = 5.33 / 0.01592       = 335
-omega_b_omega = omega_bi / 10;                  % 目标速度环带宽 [rad/s]  = 628
-K_p_omega   = omega_b_omega * J_eq / K_t;      % 比例增益 [−]  → 5.33
-tau_omega   = 10 / omega_b_omega;              % 积分时间常数 [s]  → 15.9 ms
-K_i_omega   = K_p_omega / tau_omega;           % 积分增益 [−]  → 335
-i_ref_max   = 12;                              % 速度环输出限幅 [A]（与I_max一致）
+%--- 5.2 双闭环：内电流环 PI（模最优法 MO, §5.3.1）---
+%   零极点对消：tau_i = tau_e = 2.50 ms
+%   MO条件：Kp_i·U_dc/(Rs·tau_i) = 1/(2·T_PWM_eq)
+%   => Kp_i = Rs·tau_e / (2·U_dc·T_PWM_eq) = 0.30×2.50e-3/(2×48×75e-6) = 0.1042
+tau_i       = tau_e;                            % PI积分时间 = tau_e（零极点对消）
+K_p_i       = (Rs * tau_e) / (2 * U_dc * T_PWM_eq); % 比例增益 [D*/A]  → 0.1042
+K_i_i       = K_p_i / tau_i;                   % 积分增益 [D*/(A·s)] → 41.67
+I_max       = 12;                               % 电流限幅 [A]（= I_peak）
+T_i_cl      = 2 * T_PWM_eq;                    % 电流环闭环等效时间常数 [s] = 150 μs
 
-fprintf('【五、PI 控制器参数（分析初值）】\n');
-fprintf('  电流环：tau_e=%.3f ms, omega_bi=%.0f rad/s\n', tau_e*1e3, omega_bi);
-fprintf('    K_p,i=%.4f V/A  K_i,i=%.1f V/(A·s)\n', K_p_i, K_i_i);
-fprintf('    norm: K_p,i=%.4f  K_i,i=%.2f  I_max=%d A\n\n', K_p_i_norm, K_i_i_norm, I_max);
-fprintf('  速度环：omega_bw=%.0f rad/s  tau_w=%.1f ms\n', omega_b_omega, tau_omega*1e3);
-fprintf('    K_p,w=%.4f  K_i,w=%.1f  i_ref_max=%d A\n\n', K_p_omega, K_i_omega, i_ref_max);
-fprintf('  ⚠ 以上为分析初值，S4 按构架方案2 §5.3.3 六步整定流程微调。\n\n');
+%--- 5.3 双闭环：外速度环 PI（对称最优法 SO, a=4, §5.3.2）---
+%   tau_w = a^2·T_i_cl = 16×150μs = 2.40 ms
+%   Kp_w  = J_eq / (Kt·a·T_i_cl) = 5.60e-4/(0.066×4×150e-6) = 14.14
+%   Ki_w  = Kp_w / tau_w = 5892
+a_SO        = 4;                                % 对称度参数（a=4: PM≈53°，超调~8%+滤波）
+tau_omega   = a_SO^2 * T_i_cl;                 % PI积分时间 [s]  = 2.40 ms
+K_p_omega   = J_eq / (K_t * a_SO * T_i_cl);   % 比例增益 [A·s/rad]  → 14.14
+K_i_omega   = K_p_omega / tau_omega;           % 积分增益 [A/rad]    → 5892
+i_ref_max   = I_max;                           % 速度环输出限幅 [A]
+tau_F       = tau_omega;                        % 前置滤波器时间常数 [s]=2.40ms（必须！降超调至~8%）
+
+%--- 5.4 单闭环：速度 PI（MO法 + 极点对消, §5.4.3）---
+%   被控对象：G_total = 798.0/[(42.3ms·s+1)(2.50ms·s+1)(75μs·s+1)]
+%   PI零点对消机械极点 T_m，MO法整定Kp
+%   Kp_w_s = T_m/(2·T_small·K0) = 0.0423/(2×2.575e-3×798.0) = 0.01030
+T_m_mech    = Rs * J_eq / (K_t * K_e);         % 机械时间常数 [s]  = 42.3 ms
+K_0         = U_dc / K_e;                       % 空载最大角速度 [rad/s]  = 798.0
+T_small_s   = tau_e + T_PWM_eq;                % 剩余小惯性之和 [s]  = 2.575 ms
+tau_PI_s    = T_m_mech;                         % 单闭环PI积分时间（对消T_m）
+K_p_omega_s = tau_PI_s / (2 * T_small_s * K_0);% 比例增益 [D*/(rad/s)]  → 0.01030
+K_i_omega_s = K_p_omega_s / tau_PI_s;          % 积分增益 [D*/rad]      → 0.2436
+I_cutoff    = I_max;                            % 单闭环电流截止 [A]（必须！）
+
+fprintf('【五、PI 控制器参数（MO+SO严谨推导初值）】\n');
+fprintf('  tau_e=%.3f ms, T_PWM_eq=%.1f μs\n', tau_e*1e3, T_PWM_eq*1e6);
+fprintf('  [双闭环-电流环 MO] K_p_i=%.4f D*/A  K_i_i=%.2f D*/(A·s)  T_i_cl=%.0f μs\n', K_p_i, K_i_i, T_i_cl*1e6);
+fprintf('  [双闭环-速度环 SO, a=%d] K_p_w=%.4f A·s/rad  K_i_w=%.1f A/rad  tau_F=%.2f ms\n', a_SO, K_p_omega, K_i_omega, tau_F*1e3);
+fprintf('  [单闭环 MO] T_m=%.1f ms  K0=%.1f rad/s  K_p_w_s=%.5f  K_i_w_s=%.4f\n', T_m_mech*1e3, K_0, K_p_omega_s, K_i_omega_s);
+fprintf('  ⚠ 以上为分析初值，S4 按构架方案3 §5.3.4 六步整定流程微调。\n\n');
 
 %% ═══════════════════════════════════════════════════════════════
 %  第六部分：工况指令参数（供 run_case_*.m 调用）
@@ -196,12 +215,14 @@ fprintf('【七、参数自检（与 params.md 对照）】\n');
 refs = {'J_m',1.7e-5,1e-10; 'J_L_m',5.43e-4,5e-6; 'J_eq',5.60e-4,5e-6;
         'T_L_m_flat',0.0698,5e-4; 'T_L_m_slope',0.2215,5e-4;
         'T_m_peak_req',0.4414,5e-4; 'omega_m_max',314.16,0.01;
-        'K_p_i',4.71,0.01; 'K_i_i',1880,5.0;
-        'K_p_i_norm',0.098,5e-4; 'K_i_i_norm',39.2,0.5;
-        'K_p_omega',5.33,0.02; 'K_i_omega',335,1.0};
+        'K_p_i',0.1042,1e-4; 'K_i_i',41.67,0.1;
+        'K_p_omega',14.14,0.05; 'K_i_omega',5892,10.0;
+        'K_p_omega_s',0.01030,1e-4; 'K_i_omega_s',0.2436,1e-3;
+        'T_m_mech',0.0423,5e-4};
 vals = {J_m; J_L_m; J_eq; T_L_m_flat; T_L_m_slope;
         T_m_peak_req; omega_m_max;
-        K_p_i; K_i_i; K_p_i_norm; K_i_i_norm; K_p_omega; K_i_omega};
+        K_p_i; K_i_i; K_p_omega; K_i_omega;
+        K_p_omega_s; K_i_omega_s; T_m_mech};
 pass_all = true;
 for k = 1:size(refs,1)
     nm  = refs{k,1}; ref = refs{k,2}; tol = refs{k,3};
