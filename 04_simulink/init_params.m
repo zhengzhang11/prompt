@@ -117,7 +117,7 @@ K_e         = 8.9;          % 反电势常数（线-线） [V/krpm]
 Rs          = 0.6;          % 相电阻 [Ω]
 Ls          = 0.75e-3;      % 相电感 [H]  (0.75 mH → H)
 p_poles     = 4;            % 极对数
-J_m         = 48e-6;        % 转子惯量 [kg·m²]  (48 g·cm² = 4.8e-6 kg·m²) 
+J_m         = 4.8e-6;       % 转子惯量 [kg·m²]  (48 g·cm² = 4.8e-6 kg·m²)
 
 fprintf('  U_N=%.0f V, P_N=%.0f W, n_N=%.0f rpm, n_0=%.0f rpm\n', U_N, P_N, n_N, n_0);
 fprintf('  I_N=%.1f A, I_peak=%.0f A, T_N=%.3f N·m, T_peak=%.3f N·m\n', ...
@@ -143,7 +143,7 @@ fprintf('  峰值转矩需求 T_peak = %.4f N·m vs. 电机峰值 %.3f N·m → 
 
 P_m_steady  = T_L_m_slope * omega_m_max;       % 坡道稳态功率 [W]
 fprintf('  坡道稳态功率 = %.1f W vs. 单轮限制 150 W (两轮 300 W)\n', P_m_steady);
-fprintf('  验证通过：电机型号选型安全\n\n', p_poles);
+fprintf('  验证通过：电机型号选型安全\n\n');
 
 %% ═══════════════════════════════════════════════════════════════
 %  第四部分：主电路参数（来自 params.md 第四章）
@@ -175,20 +175,28 @@ fprintf('  保护门限：I_OC=%.0f A, V_OV=%.0f V, V_UV=%.0f V, ω_stall=%.0f r
 fprintf('【控制器参数初值（分析计算）】\n');
 
 %--- 电流环（内环）PI 参数 ---
-tau_e       = Ls / Rs;                         % 电气时间常数 [s]
-omega_bi    = 6283;                            % 目标电流环带宽 [rad/s]
-K_p_i       = (2*omega_bi*Ls)/1.0;             % 比例增益初值 [V/A]
-K_i_i       = (omega_bi*Rs)/1.0;               % 积分增益初值 [V/(A·s)]
+% 设计方法：零极点对消法（架构方案 §5.3.1）
+%   令 τ_i = τ_e，则：
+%   K_p,i = ω_bi · τ_e · 2R_s = 6283 × 1.25e-3 × 1.2 = 9.42  V/A
+%   K_i,i = K_p,i / τ_e       = 9.42 / 1.25e-3        = 7536  V/(A·s)
+tau_e       = Ls / Rs;                         % 电气时间常数 τ_e [s]  = 1.25 ms
+omega_bi    = 6283;                            % 目标电流环带宽 [rad/s]  (≈ 2π×1000 Hz)
+K_p_i       = omega_bi * tau_e * 2 * Rs;       % 比例增益 [V/A]  → 9.42
+K_i_i       = K_p_i / tau_e;                   % 积分增益 [V/(A·s)] = K_p,i/τ_e → 7536
 % 归一化（除以 U_dc）
 K_p_i_norm  = K_p_i / U_dc;
 K_i_i_norm  = K_i_i / U_dc;
 I_max       = I_peak;                          % 电流限幅 [A]
 
 %--- 速度环（外环）PI 参数 ---
-omega_b_omega = 628;                           % 目标速度环带宽 [rad/s]
-K_p_omega   = 1.60;                            % 比例增益初值 [−]
-tau_omega   = 15.9e-3;                         % 积分时间常数 [s]
-K_i_omega   = 1.0 / tau_omega;                 % 积分增益初值 [−]
+% 设计方法：带宽分离法（架构方案 §5.3.2），内环带宽/10
+%   K_p,ω = ω_bω · J_eq / K_t = 628 × 2.17e-4 / 0.085 = 1.60
+%   τ_ω   = 10 / ω_bω          = 10 / 628            = 15.9 ms
+%   K_i,ω = K_p,ω / τ_ω        = 1.60 / 0.0159       = 100.6
+omega_b_omega = omega_bi / 10;                 % 目标速度环带宽 [rad/s] = 628（内环/10，带宽分离）
+K_p_omega   = omega_b_omega * J_eq / K_t;      % 比例增益 [−]  → 1.60
+tau_omega   = 10 / omega_b_omega;              % 积分时间常数 [s]  → 15.9 ms
+K_i_omega   = K_p_omega / tau_omega;           % 积分增益 [−]  → 100.6
 i_ref_max   = I_peak;                          % 速度环输出（电流指令）限幅 [A]
 
 fprintf('  电流环（内环）：\n');
@@ -204,6 +212,35 @@ fprintf('    i_ref_max = %.0f A\n\n', i_ref_max);
 
 fprintf('  ⚠ 以上为分析初值，S4 按照架构方案§5.3.3 的六步整定流程微调。\n');
 fprintf('  最终整定结果以实测为准并更新至此处。\n\n');
+
+%% ═══════════════════════════════════════════════════════════════
+%  冻结参数一致性自检（关键参数）
+%% ═══════════════════════════════════════════════════════════════
+
+fprintf('【冻结参数一致性自检】\n');
+check_items = {
+    'J_m',        J_m,         4.8e-6, 1e-9;    % params.md §三：4.8e-6 kg·m²
+    'K_p_i',      K_p_i,       9.42,   0.01;    % params.md §5.1：9.42 V/A
+    'K_i_i',      K_i_i,       7536,   5.0;     % params.md §5.1：7536，公式误差≤5
+    'K_p_i_norm', K_p_i_norm,  0.196,  5e-4;    % params.md §5.1：0.196
+    'K_i_i_norm', K_i_i_norm,  157,    0.2;     % params.md §5.1：157
+    'K_p_omega',  K_p_omega,   1.60,   1e-9;    % params.md §5.2：1.60
+    'K_i_omega',  K_i_omega,   100.6,  0.1;     % params.md §5.2：100.6
+    'J_eq',       J_eq,        2.17e-4, 5e-7;   % params.md §2.4：2.17e-4 kg·m²
+};
+
+for k = 1:size(check_items,1)
+        name = check_items{k,1};
+        val  = check_items{k,2};
+        ref  = check_items{k,3};
+        tol  = check_items{k,4};
+        if abs(val - ref) <= tol
+                fprintf('  [OK] %s = %.6g (ref=%.6g)\n', name, val, ref);
+        else
+                fprintf('  [WARN] %s = %.6g (ref=%.6g)\n', name, val, ref);
+        end
+end
+fprintf('\n');
 
 %% ═══════════════════════════════════════════════════════════════
 %  第六部分：仿真配置参数
