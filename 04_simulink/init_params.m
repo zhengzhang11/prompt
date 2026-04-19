@@ -240,3 +240,54 @@ else
     fprintf('\n  存在偏差项，请检查！\n');
 end
 fprintf('\n========== init_params.m 加载完成 ==========\n\n');
+
+%% ═══════════════════════════════════════════════════════════════
+%  第八部分：求解器刚性修复参数（供 set_param 调用）
+%  问题背景：PWM 20kHz 开关 + Simscape BLDC DAE → 步长压至机器精度
+%  根本修复：Simscape 局部求解器 + 主求解器换刚性 ode23t
+%% ═══════════════════════════════════════════════════════════════
+%
+%  === GUI 操作路径（每次建新模型后执行一次）===
+%
+%  [1] Simscape 局部求解器（最关键）
+%      双击 "电机模型" 子系统 → 双击 Solver Configuration 块
+%      ✓ Use local solver: 勾选
+%        Solver:      后向欧拉 (Backward Euler)
+%        Sample time: 5e-6   (5 μs = T_s/10，速度精度折中)
+%
+%  [2] 主 Simulink 求解器
+%      Simulation → Model Configuration Parameters → Solver 标签
+%        Type:        Variable-step
+%        Solver:      ode23t   （刚性首选；更高刚性用 ode15s）
+%        Max step:    2.5e-5   (= T_s/2 = 25 μs，速度优先)
+%        Rel tol:     1e-3
+%        Abs tol:     1e-5
+%        Min step:    auto     （不填）
+%
+%  [3] 开关缓冲器（消除理想跳变奇点）
+%      IGBT/MOSFET 参数对话框 → Snubber
+%        Rs_snubber:  1e4   Ω
+%        Cs_snubber:  1e-9  F
+%
+%  === 脚本方式（自动配置，需先用 open_system 打开模型）===
+%  mdl = 'powerstage';  % ← 改成实际模型名（不含 .slx）
+%  set_param(mdl, 'SolverType',         'Variable-step');
+%  set_param(mdl, 'Solver',             'ode23t');
+%  set_param(mdl, 'MaxStep',            num2str(T_s/2));   % 2.5e-5
+%  set_param(mdl, 'RelTol',             '1e-3');
+%  set_param(mdl, 'AbsTol',             '1e-5');
+%  set_param(mdl, 'MinStep',            'auto');
+%  save_system(mdl);
+%  fprintf('求解器配置已写入 %s.slx\n', mdl);
+
+% 供脚本引用的求解器关键参数
+solver_MaxStep      = T_s / 2;      % 主求解器最大步长 [s]  = 2.5e-5 (T_s/2，速度优先)
+solver_AbsTol       = 1e-5;         % 绝对误差容限
+solver_RelTol       = 1e-3;         % 相对误差容限
+simscape_Ts_local   = 5e-6;         % Simscape 局部求解器采样步长 [s]  = 5 μs (T_s/10)
+
+fprintf('【八、求解器刚性修复参数（已导出至工作空间）】\n');
+fprintf('  主求解器：ode23t，MaxStep=%.2e s (T_s/2)，AbsTol=%.0e，RelTol=%.0e\n', ...
+        solver_MaxStep, solver_AbsTol, solver_RelTol);
+fprintf('  Simscape 局部步长：%.0e s (5 μs = T_s/10，速度精度折中)\n', simscape_Ts_local);
+fprintf('  ⚠ GUI 操作：见本文件第八部分注释\n\n');
